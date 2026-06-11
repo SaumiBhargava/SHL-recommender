@@ -1,0 +1,25 @@
+# Secrets — NEVER commit
+.env
+*.env
+.env.*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+env/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Models cache (downloaded at runtime)
+.cache/
+
+# NOTE: data/catalog.faiss and data/catalog_meta.json are intentionally
+# committed — the server needs them at runtime on Render.
