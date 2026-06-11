@@ -3,6 +3,6 @@ uvicorn[standard]
 pydantic
 python-dotenv
 faiss-cpu
-sentence-transformers
+fastembed
 numpy
 google-genai

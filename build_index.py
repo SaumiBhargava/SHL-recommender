@@ -47,11 +47,6 @@ import faiss
 # index.add(vectors) → adds vectors to the index
 # index.search(query, k) → finds k nearest vectors to query
 
-from sentence_transformers import SentenceTransformer
-# SentenceTransformer loads a pre-trained model that converts
-# text strings into vectors (embeddings).
-# model.encode(["text1", "text2"]) → returns array of vectors
-
 # Add parent directory to path so we can import from app/
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from app.config import (
@@ -60,6 +55,10 @@ from app.config import (
     FAISS_METADATA_PATH,
     keys_to_test_type,
 )
+from app.embedding import embed_texts
+# embed_texts(list_of_strings) -> (n, 384) float32, L2-normalized vectors.
+# Uses fastembed (ONNX) — the SAME pipeline retrieval.py uses at runtime,
+# so the index we build here matches the query vectors exactly.
 
 
 # ============================================================
@@ -201,7 +200,7 @@ def build_embedding_text(assessment: dict) -> str:
 # STEP 3: CREATE AND SAVE THE FAISS INDEX
 # ============================================================
 
-def build_index(assessments: list, model: SentenceTransformer) -> tuple:
+def build_index(assessments: list) -> tuple:
     """
     Takes cleaned assessments, generates embeddings, builds FAISS index.
     
@@ -217,45 +216,25 @@ def build_index(assessments: list, model: SentenceTransformer) -> tuple:
     texts = [build_embedding_text(a) for a in assessments]
     # texts[i] corresponds to assessments[i]
     
-    print(f"Encoding {len(texts)} assessments with sentence-transformers...")
-    print("  (This takes 1-3 minutes the first time — model downloads ~90MB)")
-    
-    # encode() converts each text string to a 384-dimensional vector.
-    # show_progress_bar=True prints a progress bar.
-    # convert_to_numpy=True gives us numpy arrays (required by FAISS).
-    embeddings = model.encode(
-        texts,
-        show_progress_bar=True,
-        convert_to_numpy=True,
-        batch_size=32,    # process 32 at a time (memory efficient)
-    )
+    print(f"Encoding {len(texts)} assessments with fastembed (all-MiniLM-L6-v2)...")
+    print("  (First run downloads the small ONNX model, then it's cached)")
+
+    # embed_texts returns an (n, 384) float32 array, already L2-normalized.
+    # This is the exact same pipeline retrieval.py uses at query time.
+    embeddings = embed_texts(texts)
     # embeddings.shape == (num_assessments, 384)
-    # Each row is one assessment's 384-dimensional vector
-    
-    # Normalize vectors to unit length (required for cosine similarity)
-    # Without normalization, inner product ≠ cosine similarity.
-    # faiss.normalize_L2 modifies the array in-place.
-    faiss.normalize_L2(embeddings)
-    
+
     # Get the dimension of our vectors (384 for MiniLM)
     dimension = embeddings.shape[1]
-    # embeddings.shape returns (rows, cols) — we want cols (the vector size)
-    
     print(f"  Vector dimension: {dimension}")
-    
+
     # Create a FAISS index.
-    # IndexFlatIP = Flat Index using Inner Product similarity
-    # "Flat" means it stores all vectors exactly (no compression).
-    # "IP" (Inner Product) = dot product, which equals cosine similarity
-    # when vectors are normalized (which we did above).
+    # IndexFlatIP = Flat Index using Inner Product similarity.
+    # With L2-normalized vectors, inner product == cosine similarity.
     index = faiss.IndexFlatIP(dimension)
-    
-    # Convert to float32 — FAISS requires this specific data type.
-    embeddings_f32 = embeddings.astype(np.float32)
-    
-    # Add all vectors to the index.
-    # After this, the index contains all our assessment vectors.
-    index.add(embeddings_f32)
+
+    # Add all vectors to the index (already float32 from embed_texts).
+    index.add(embeddings)
     
     print(f"  FAISS index built: {index.ntotal} vectors stored")
     
@@ -325,18 +304,8 @@ def main():
         print("ERROR: No valid assessments found. Check your shl_product_catalog.json.")
         sys.exit(1)
     
-    # --- Step 3: Load embedding model ---
-    print("Loading sentence-transformer model (all-MiniLM-L6-v2)...")
-    model = SentenceTransformer("all-MiniLM-L6-v2")
-    # all-MiniLM-L6-v2 is a well-balanced model:
-    #   - Small: ~90MB download, loads in ~2 seconds
-    #   - Fast: ~80ms per batch of 32 texts
-    #   - Good quality: strong semantic understanding
-    # It downloads automatically the first time, then caches locally.
-    print("  Model loaded")
-    
-    # --- Step 4: Build FAISS index ---
-    index, metadata = build_index(assessments, model)
+    # --- Step 3 & 4: Build FAISS index (embedder loads inside embed_texts) ---
+    index, metadata = build_index(assessments)
     
     # --- Step 5: Save to disk ---
     print("Saving index to disk...")

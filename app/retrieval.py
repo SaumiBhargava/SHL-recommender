@@ -18,7 +18,6 @@ import json
 import os
 import numpy as np
 import faiss
-from sentence_transformers import SentenceTransformer
 from typing import List, Optional
 import logging
 
@@ -36,6 +35,7 @@ from app.config import (
     FAISS_METADATA_PATH,
     RETRIEVAL_TOP_K,
 )
+from app.embedding import get_embedder, embed_texts
 
 
 # ============================================================
@@ -76,11 +76,12 @@ class CatalogRetriever:
         
         Raises RuntimeError if files don't exist (user forgot to run build_index.py).
         """
-        # --- Load the embedding model ---
-        logger.info("Loading sentence-transformer model...")
-        self.model = SentenceTransformer("all-MiniLM-L6-v2")
-        # On first run: downloads ~90MB from HuggingFace and caches locally.
-        # On subsequent runs: loads from cache in ~2 seconds.
+        # --- Load the embedding model (ONNX via fastembed) ---
+        logger.info("Loading embedding model (fastembed / all-MiniLM-L6-v2)...")
+        self.model = get_embedder()
+        # On first run: downloads the small ONNX model and caches locally.
+        # On subsequent runs: loads from cache in ~1 second. Far less RAM
+        # than the PyTorch version, so it fits Render's free tier.
         logger.info("  Model loaded")
 
         # --- Load the FAISS index ---
@@ -124,16 +125,9 @@ class CatalogRetriever:
         
         Returns a numpy array of shape (1, 384) — FAISS expects 2D arrays.
         """
-        # encode() returns shape (384,) — a 1D array
-        vector = self.model.encode([query], convert_to_numpy=True)
-        # We pass a list [query] even though it's one item because
-        # encode() expects a list and returns a 2D array (batch, dim).
-        
-        # Normalize to unit length (same as we did in build_index.py)
-        faiss.normalize_L2(vector)
-        
-        # Return as float32 (FAISS requirement)
-        return vector.astype(np.float32)
+        # embed_texts returns shape (1, 384), float32, already L2-normalized
+        # (same pipeline build_index.py uses, so query and index vectors match).
+        return embed_texts([query])
 
     def search(
         self,
